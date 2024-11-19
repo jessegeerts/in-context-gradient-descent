@@ -26,6 +26,9 @@ from datetime import datetime, timezone
 import pytz
 cet = pytz.timezone('CET')
 
+
+jnp.DeviceArray = jax.Array
+
 file_time = str(datetime.now(tz=cet))
 
 data_creator = vmap(create_reg_data,

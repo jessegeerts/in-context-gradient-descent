@@ -9,6 +9,104 @@ import jax.numpy as jnp
 import numpy as np
 
 
+def create_reg_data_TI_onehot_eval(rng, i_size, c_size, size_distract, input_range, w_scale, queries=(0,1), return_true_order=False):
+    """Create a linear regression data set corresponding to transitive inference data.
+    Each X will be a concatenation of two onehot vectors representing two classes. Y will be 1 or -1, depending on the
+    relative order of the two classes in the transitive inference hierarchy.
+
+    Note, the weights of this regression should just reflect the rank of each item. 
+    """
+    assert i_size % 2 == 0, "i_size must be even"
+    rng, new_rng, new_rng2, new_rng3, new_rng4 = jax.random.split(rng, 5)
+    n_items = i_size // 2
+    assert (queries[0] < n_items) & (queries[1] < n_items), "query contains item that's not there"
+    true_order = jax.random.permutation(new_rng, jnp.arange(n_items))
+    true_ranks = jnp.argsort(true_order)
+    true_ranks = true_ranks - jnp.mean(true_ranks)
+    pairs = list(zip(true_order, true_order[1:]))
+    x = jnp.zeros((c_size, i_size))
+    for i, (j, k) in enumerate(pairs):
+        # fill first half with right order pairs
+        x = x.at[i, j].set(1)
+        x = x.at[i, n_items+k].set(1)
+        # second half with left order pairs
+        x = x.at[i+len(pairs), k].set(1)
+        x = x.at[i+len(pairs), n_items+j].set(1)
+    
+    # the true weights are just reflections of the relative ranks 
+    w = jnp.concat([true_ranks, -true_ranks])
+    
+    # first randomly shuffle the rows 
+    random_order = jax.random.permutation(new_rng2, jnp.arange(x.shape[0]))
+    x = x[random_order]
+    
+    # then the query is given in the argument 
+    x_query = jnp.zeros((1, i_size))
+    x_query = x_query.at[0, true_order[queries[0]]].set(1)
+    x_query = x_query.at[0, n_items + true_order[queries[1]]].set(1)
+    y_data = x @ w 
+    y_target = x_query @ w
+    y_target = y_target[..., None]
+    
+    # then write it as a sequence for the transformer
+    seq = jnp.concatenate([x, y_data[..., None]], -1)
+    target = jnp.concatenate([x_query, y_target], -1)
+    x_querry_init = -1*x_query.dot(jnp.ones_like(x_query).T*0.0)
+    zero = jnp.concatenate([x_query, x_querry_init], -1)
+    seq = jnp.concatenate([seq, zero], 0)
+    if return_true_order:
+        return jnp.squeeze(seq), jnp.squeeze(target), w, true_order
+    return jnp.squeeze(seq), jnp.squeeze(target), w
+
+
+@partial(jax.jit, static_argnums=(1, 2, 3))
+def create_reg_data_TI_onehot_train(rng, i_size, c_size, size_distract, input_range, w_scale):
+    """Create a linear regression data set corresponding to transitive inference data.
+    Each X will be a concatenation of two onehot vectors representing two classes. Y will be 1 or -1, depending on the
+    relative order of the two classes in the transitive inference hierarchy.
+
+    Note, the weights of this regression should just reflect the rank of each item. 
+    """
+    assert i_size % 2 == 0, "i_size must be even"
+    rng, new_rng, new_rng2, new_rng3, new_rng4 = jax.random.split(rng, 5)
+    n_items = i_size // 2
+    true_order = jax.random.permutation(new_rng, jnp.arange(n_items))
+    true_ranks = jnp.argsort(true_order)
+    pairs = list(zip(true_order, true_order[1:]))
+    
+    x = jnp.zeros((c_size+1, i_size))
+    for i, (j, k) in enumerate(pairs):
+        # fill first half with right order pairs
+        x = x.at[i, j].set(1)
+        x = x.at[i, n_items+k].set(1)
+        # second half with left order pairs
+        x = x.at[i+len(pairs), k].set(1)
+        x = x.at[i+len(pairs), n_items+j].set(1)
+    
+    # the true weights are just reflections of the relative ranks 
+    w = jnp.concat([true_ranks, -true_ranks])
+    
+    # first randomly shuffle the rows 
+    random_order = jax.random.permutation(new_rng2, jnp.arange(x.shape[0]))
+    x = x[random_order]
+    
+    # then pick the query to be the final row
+    x_query = jnp.expand_dims(x[-1],0)
+    x = x[:-1]
+    y_data = x @ w 
+    y_target = x_query @ w
+    y_target = y_target[..., None]
+    
+    # then write it as a sequence for the transformer
+    seq = jnp.concatenate([x, y_data[..., None]], -1)
+    target = jnp.concatenate([x_query, y_target], -1)
+    x_querry_init = -1*x_query.dot(jnp.ones_like(x_query).T*0.0)
+    zero = jnp.concatenate([x_query, x_querry_init], -1)
+    seq = jnp.concatenate([seq, zero], 0)
+
+    return jnp.squeeze(seq), jnp.squeeze(target), w
+
+
 @partial(jax.jit, static_argnums=(1, 2, 3))
 def create_reg_data(rng, i_size, c_size, size_distract, input_range, w_scale):
   """Create a linear regression data set: X*w where x ~ U(-1, 1), w ~ N(0,1)."""
